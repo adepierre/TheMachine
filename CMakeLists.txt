@@ -9,11 +9,13 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS}")
 set(${CMAKE_PROJECT_NAME}_SRC
         src/main.cpp
         src/layers.cpp
+        src/utils.cpp
         src/yolov5.cpp
     )
     
 set(${CMAKE_PROJECT_NAME}_HEADERS
         include/TheMachine/layers.hpp
+        include/TheMachine/utils.hpp
         include/TheMachine/yolov5.hpp
     )
 

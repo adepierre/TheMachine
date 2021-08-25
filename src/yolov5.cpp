@@ -4,6 +4,7 @@
 #include <ryml_std.hpp>
 #include <ryml.hpp>
 
+
 YoloV5BlockImpl::YoloV5BlockImpl(const int attach_index_,
     const std::vector<int>& from_, const KnownBlock type_,
     torch::nn::Sequential seq_)
@@ -42,6 +43,107 @@ int make_divisible(const float x, const int div)
     return std::ceil(x / div) * div;
 }
 
+// Convert [x, y, w, h] boxes to [x1, y1, x2, y2] top left, bottom right
+torch::Tensor xywh2xyxy(torch::Tensor x)
+{
+    torch::Tensor output = x.clone();
+    output.index({ torch::indexing::Slice(), 0 }) =
+        x.index({ torch::indexing::Slice(), 0 }) - x.index({ torch::indexing::Slice(), 2 }) / 2.0f;
+    output.index({ torch::indexing::Slice(), 1 }) =
+        x.index({ torch::indexing::Slice(), 1 }) - x.index({ torch::indexing::Slice(), 3 }) / 2.0f;
+    output.index({ torch::indexing::Slice(), 2 }) =
+        x.index({ torch::indexing::Slice(), 0 }) - x.index({ torch::indexing::Slice(), 2 }) / 2.0f;
+    output.index({ torch::indexing::Slice(), 3 }) =
+        x.index({ torch::indexing::Slice(), 1 }) - x.index({ torch::indexing::Slice(), 3 }) / 2.0f;
+
+    return output;
+}
+
+// TODO, GPU support would also be nice (https://github.com/pytorch/vision/blob/7947fc8fb38b1d3a2aca03f22a2e6a3caa63f2a0/torchvision/csrc/ops/cuda/nms_kernel.cu)
+/// <summary>
+/// Perform Non-Maximum Suppression over the boxes given (on CPU)
+/// </summary>
+/// <param name="boxes">[N, 4](Float-CPU) tensor, x1, y1 (top left), x2, y2 (bottom right)</param>
+/// <param name="scores">[N](Float-CPU) tensor, score for each box</param>
+/// <param name="iou_threshold">IoU threshold for suppression</param>
+/// <returns>A [n](Long) tensor of kept indices, with n <= N</returns>
+torch::Tensor nms_kernel(const torch::Tensor& boxes, const torch::Tensor& scores, const float iou_threshold)
+{
+    if (boxes.size(0) == 0)
+    {
+        return torch::empty({ 0 }, torch::TensorOptions().dtype(torch::kLong));
+    }
+
+    torch::Tensor x1_t = boxes.index({torch::indexing::Slice(), 0}).contiguous();
+    torch::Tensor y1_t = boxes.index({torch::indexing::Slice(), 1}).contiguous();
+    torch::Tensor x2_t = boxes.index({torch::indexing::Slice(), 2}).contiguous();
+    torch::Tensor y2_t = boxes.index({torch::indexing::Slice(), 3}).contiguous();
+
+    torch::Tensor areas_t = (x2_t - x1_t) * (y2_t - y1_t);
+
+    // Get the sorted indices
+    torch::Tensor order_t = std::get<1>(scores.sort(0, true));
+
+    const int64_t num_boxes = boxes.size(0);
+
+    torch::Tensor suppressed_t = torch::zeros({ num_boxes }, torch::TensorOptions().dtype(torch::kBool));
+    torch::Tensor kept_t = torch::zeros({ num_boxes }, torch::TensorOptions().dtype(torch::kLong));
+
+    bool* suppressed = suppressed_t.data_ptr<bool>();
+    int64_t* kept = kept_t.data_ptr<int64_t>();
+    int64_t* order = order_t.data_ptr<int64_t>();
+    float* x1 = x1_t.data_ptr<float>();
+    float* y1 = y1_t.data_ptr<float>();
+    float* x2 = x2_t.data_ptr<float>();
+    float* y2 = y2_t.data_ptr<float>();
+    float* areas = areas_t.data_ptr<float>();
+
+    int64_t num_to_keep = 0;
+
+    // For each box in score order
+    for (size_t i = 0; i < num_boxes; ++i)
+    {
+        int64_t index = order[i];
+
+        if (suppressed[index])
+        {
+            continue;
+        }
+
+        // Keep this one
+        kept[num_to_keep++] = index;
+
+        // For each other, check if IoU is < threshold
+        for (size_t j = i+1; j < num_boxes; ++j)
+        {
+            int64_t jndex = order[j];
+
+            if (suppressed[jndex])
+            {
+                continue;
+            }
+
+            float intersection = 
+                std::max(0.0f, 
+                    std::min(x2[index], x2[jndex]) - 
+                    std::max(x1[index], x1[jndex])
+                )
+                * 
+                std::max(0.0f, 
+                    std::min(y2[index], y2[jndex]) -
+                    std::max(y1[index], y1[jndex])
+                );
+
+            if (intersection / (areas[index] + areas[jndex] - intersection) > iou_threshold)
+            {
+                suppressed[jndex] = true;
+            }
+        }
+    }
+
+    return kept_t.index({ torch::indexing::Slice(0, num_to_keep) });
+}
+
 YoloV5Impl::YoloV5Impl(const std::string& config_path, const int num_in_channels_)
 {
     num_in_channels = num_in_channels_;
@@ -73,6 +175,63 @@ torch::Tensor YoloV5Impl::forward(torch::Tensor x)
     }
 
     return detect->forward(detect_inputs);
+}
+
+std::vector<torch::Tensor> YoloV5Impl::NonMaxSuppression(torch::Tensor prediction,
+    float conf_threshold, float iou_threshold, int max_det, const std::vector<int>& class_filter)
+{
+    const size_t batch_size = prediction.size(0);
+    std::vector<torch::Tensor> outputs(batch_size, torch::zeros({0, 6}, torch::TensorOptions().device(prediction.device())));
+
+    torch::Tensor candidates = prediction.index({ "...", 4 }) > conf_threshold;
+
+    for (size_t i = 0; i < batch_size; ++i)
+    {
+        torch::Tensor x = prediction[i].index({ candidates[i] });
+
+        // If no candidates, go to next image
+        if (!x.size(0))
+        {
+            continue;
+        }
+
+        // Compute overall conf (obj conf * cls_conf)
+        x.index({ torch::indexing::Slice(), torch::indexing::Slice(5, torch::indexing::None) }) *=
+            x.index({ torch::indexing::Slice(), torch::indexing::Slice(4, 5) });
+
+        torch::Tensor box = xywh2xyxy(x.index({ torch::indexing::Slice(), torch::indexing::Slice(torch::indexing::None, 4) }));
+
+        torch::Tensor conf, j;
+        std::tie(conf, j) = x.index({ torch::indexing::Slice(), torch::indexing::Slice(5, torch::indexing::None) }).max(1, true);
+
+        x = torch::cat({ box, conf, j.to(torch::kFloat32) }, 1).index({ conf.view({-1}) > conf_threshold });
+
+        if (class_filter.size() > 0)
+        {
+            x = x.index({
+                (x.index({torch::indexing::Slice(), torch::indexing::Slice(5, 6)}) ==
+                torch::from_blob((int*)class_filter.data(), class_filter.size(),
+                    torch::TensorOptions().device(x.device())).to(torch::kFloat))
+                .any(1) });
+        }
+
+        // If no candidates, go to next image
+        if (!x.size(0))
+        {
+            continue;
+        }
+
+        // Spatially separate the classes so NMS is done per class
+        torch::Tensor boxes = x.index({ torch::indexing::Slice(), torch::indexing::Slice(torch::indexing::None, 4) })
+            + x.index({ torch::indexing::Slice(), torch::indexing::Slice(5,6) }) * 4096;
+        torch::Tensor scores = x.index({ torch::indexing::Slice(), 4 });
+
+        torch::Tensor indices = nms_kernel(boxes, scores, iou_threshold);
+
+        outputs[i] = x.index({ indices });
+    }
+
+    return outputs;
 }
 
 std::vector<torch::Tensor> YoloV5Impl::forward_backbone(torch::Tensor x)
@@ -220,7 +379,6 @@ void YoloV5Impl::ParseConfig(const std::string& config_path)
         }
         else if (module_name == "nn.Upsample")
         {
-            // assert(from.size() == 1);
             int channel_in = 0;
             if (from[0] == -1)
             {
@@ -258,7 +416,6 @@ void YoloV5Impl::ParseConfig(const std::string& config_path)
         }
         else
         {
-            // assert(from.size() == 1);
             int channel_in = 0;
             if (from[0] == -1)
             {
@@ -364,7 +521,7 @@ void YoloV5Impl::SetStride()
         {
             c = backbone_outputs.size() + c;
         }
-        strides[i] = s / backbone_outputs[c].sizes()[backbone_outputs[c].sizes().size() - 2];
+        strides[i] = s / backbone_outputs[c].size(-2);
     }
     detect->seq[0]->as<Detect>()->SetStride(strides);
 }
