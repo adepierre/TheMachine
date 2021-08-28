@@ -13,6 +13,8 @@ enum class KnownBlock
 	Detect
 };
 
+class PythonWeightsFile;
+
 struct YoloV5BlockImpl : public torch::nn::Module
 {
 	YoloV5BlockImpl(const int attach_index_,
@@ -37,6 +39,8 @@ public:
 	~YoloV5Impl();
 
 	torch::Tensor forward(torch::Tensor x);
+
+	void LoadWeights(PythonWeightsFile& weights);
 
 	/// <summary>
 	/// NMS on forward results.

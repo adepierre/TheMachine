@@ -1,5 +1,6 @@
 #include "TheMachine/yolov5.hpp"
 #include "TheMachine/layers.hpp"
+#include "TheMachine/utils.hpp"
 
 #include <ryml_std.hpp>
 #include <ryml.hpp>
@@ -175,6 +176,57 @@ torch::Tensor YoloV5Impl::forward(torch::Tensor x)
     }
 
     return detect->forward(detect_inputs);
+}
+
+void CopyRawDataToTensor(const std::vector<char>& src, torch::Tensor& dst)
+{
+    if (dst.is_floating_point())
+    {
+        // Floating point tensors are saved by ultralytics
+        // with half precision
+        torch::Tensor target = torch::zeros_like(dst, torch::TensorOptions().dtype(torch::kF16).layout(torch::kStrided));
+        if (target.itemsize() * target.numel() != src.size())
+        {
+            throw std::runtime_error("Error trying to load raw data into tensor, sizes don't match");
+        }
+
+        std::copy(src.data(), src.data() + src.size(), reinterpret_cast<char*>(target.data_ptr()));
+        dst.set_data(target.to(torch::kFloat));
+    }
+    else
+    {
+        torch::Tensor target = torch::zeros_like(dst, torch::TensorOptions().layout(torch::kStrided));
+        if (target.itemsize() * target.numel() != src.size())
+        {
+            throw std::runtime_error("Error trying to load raw data into tensor, sizes don't match");
+        }
+
+        std::copy(src.data(), src.data() + src.size(), reinterpret_cast<char*>(target.data_ptr()));
+        dst.set_data(target);
+    }
+}
+
+void YoloV5Impl::LoadWeights(PythonWeightsFile& weights)
+{
+    size_t counter_params = 0;
+    size_t counter_buffers = 0;
+    for (auto& submodule : modules())
+    {
+        for (auto& p : submodule->parameters(false))
+        {
+            CopyRawDataToTensor(weights.GetNextTensor(), p);
+            counter_params += 1;
+        }
+
+        for (auto& b : submodule->buffers(false))
+        {
+            CopyRawDataToTensor(weights.GetNextTensor(), b);
+            counter_buffers += 1;
+        }
+    }
+
+    std::cout << counter_params << " parameter tensors successfully loaded" << std::endl;
+    std::cout << counter_buffers << " buffer tensors successfully loaded" << std::endl;
 }
 
 std::vector<torch::Tensor> YoloV5Impl::NonMaxSuppression(torch::Tensor prediction,
@@ -374,6 +426,9 @@ void YoloV5Impl::ParseConfig(const std::string& config_path)
             }
             for (size_t j = 0; j < block_depth; j++)
             {
+                // We set the anchors from the yaml file to get the right
+                // tensor shape, but they will be overloaded with the ones
+                // saved in the .pt file anyway.
                 internal_seq->push_back(Detect(num_class, anchors, output_convs));
             }
         }

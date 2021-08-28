@@ -2,6 +2,7 @@
 #include <iostream>
 #include <fstream>
 
+#include "TheMachine/layers.hpp"
 #include "TheMachine/yolov5.hpp"
 #include "TheMachine/utils.hpp"
 
@@ -13,9 +14,8 @@ int main(int argc, char* argv[])
 
     {
         PythonWeightsFile weights("yolov5s.pt");
-        weights.LoadWeightsTo(yolo.ptr());
+        yolo->LoadWeights(weights);
     }
-
 
     torch::Tensor input = torch::zeros({ 2,3,320,320 });
 

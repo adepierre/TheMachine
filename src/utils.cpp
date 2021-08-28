@@ -5,45 +5,14 @@
 PythonWeightsFile::PythonWeightsFile(const std::string& path)
 {
     file = std::ifstream(path, std::ios::in | std::ios::binary);
-	last_index = -1;
+	next_tensor_index = 0;
     ReadHeaders();
+	ReadTensorOrder();
 }
 
 PythonWeightsFile::~PythonWeightsFile()
 {
 	file.close();
-}
-
-void CopyRawDataToTensor(const std::vector<char>& src, torch::Tensor& dst)
-{
-    if (dst.itemsize() * dst.numel() != src.size())
-    {
-        throw std::runtime_error("Error trying to load raw data into tensor, sizes don't match");
-    }
-
-    // Make sure the tensor is contiguous
-    dst = dst.contiguous();
-
-    std::copy(src.data(), src.data() + src.size(), reinterpret_cast<char*>(dst.data_ptr()));
-}
-
-void PythonWeightsFile::LoadWeightsTo(const std::shared_ptr<torch::nn::Module>& m)
-{
-    for (auto& submodule : m->modules())
-    {
-		std::cout << submodule->name() << std::endl;
-
-        for (auto& p : submodule->parameters(false))
-        {
-			std::cout << p.sizes() << std::endl;
-			CopyRawDataToTensor(GetNextTensor(), p);
-        }
-
-        for (auto& b : submodule->buffers(false))
-        {
-			CopyRawDataToTensor(GetNextTensor(), b);
-        }
-    }
 }
 
 void PythonWeightsFile::ReadHeaders()
@@ -114,26 +83,95 @@ void PythonWeightsFile::ReadHeaders()
 	}
 }
 
+std::vector<char> PythonWeightsFile::GetData(const size_t index)
+{
+	std::vector<char> output(entries[index].uncompressed_size);
+	file.seekg(entries[index].data_offset);
+	file.read(output.data(), entries[index].uncompressed_size);
+
+	return output;
+}
+
+bool is_digit(const char c)
+{
+	return c > 0x2F && c < 0x3A;
+}
+
+// With torch.save with versions < 1.9, tensors
+// are saved using their _cdata pointer as name
+// which means they are not necessarily ordered
+// in the archive file. This tries to find the
+// good order in which they need to be read
+// (from 1.9, they are saved as 0, 1, 2 ...,
+// this will be modified when/if ultralytics update
+// the pytorch version used to save the weights files)
+void PythonWeightsFile::ReadTensorOrder()
+{
+	tensor_order.clear();
+	tensor_order.reserve(entries.size());
+
+	size_t data_index = -1;
+
+	// Search for the data entry (should be the first one)
+	for (size_t i = 0; i < entries.size(); ++i)
+	{
+		if (entries[i].name == "archive/data.pkl")
+		{
+			data_index = i;
+			break;
+		}
+	}
+
+	if (data_index == -1)
+	{
+		std::cerr << "Warning, no archive/data.pkl entry found in provided zip file" << std::endl;
+		return;
+	}
+
+	std::vector<char> data_pkl = GetData(data_index);
+
+	data_index = 0;
+
+	std::string current_tensor_name = "";
+
+	while (data_index < data_pkl.size())
+	{
+		//If this is a digit, add it to the current name
+		if (is_digit(data_pkl[data_index]))
+		{
+			current_tensor_name += data_pkl[data_index];
+		}
+		// If we had digits before but this isn't one,
+		// search for a tensor with a matching name
+		else if (!current_tensor_name.empty())
+		{
+			for (size_t i = 0; i < entries.size(); ++i)
+			{
+				if (entries[i].name == "archive/data/" + current_tensor_name)
+				{
+					tensor_order.push_back(i);
+					break;
+				}
+			}
+
+			current_tensor_name = "";
+		}
+
+		data_index++;
+	}
+}
+
 std::vector<char> PythonWeightsFile::GetNextTensor()
 {
-	do
-	{
-		last_index++;
-	} while (last_index < entries.size() && entries[last_index].name.find("archive/data/") != 0);
-
-	if (last_index == entries.size())
+	if (next_tensor_index == tensor_order.size())
 	{
 		throw std::runtime_error("No more tensor in zip archive");
 	}
 
-	if (entries[last_index].compression != 0)
+	if (entries[tensor_order[next_tensor_index]].compression != 0)
 	{
-		throw std::runtime_error("Compression method " + std::to_string(entries[last_index].compression) + " not supported");
+		throw std::runtime_error("Compression method " + std::to_string(entries[tensor_order[next_tensor_index]].compression) + " not supported");
 	}
 
-	std::vector<char> output(entries[last_index].uncompressed_size);
-	file.seekg(entries[last_index].data_offset);
-	file.read(output.data(), entries[last_index].uncompressed_size);
-
-	return output;
+	return GetData(tensor_order[next_tensor_index++]);
 }

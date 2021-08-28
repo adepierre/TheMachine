@@ -4,14 +4,6 @@
 #include <vector>
 #include <fstream>
 
-namespace torch
-{
-	namespace nn
-	{
-		class Module;
-	}
-}
-
 /// <summary>
 /// A simple class to load python .pt files into a C++ module with
 /// the same architecture. This is NOT a full zip implementation
@@ -23,14 +15,15 @@ public:
     PythonWeightsFile(const std::string& path);
     ~PythonWeightsFile();
 
-	void LoadWeightsTo(const std::shared_ptr<torch::nn::Module>& m);
-
     PythonWeightsFile() = delete;
     PythonWeightsFile(const PythonWeightsFile&) = delete;
 
+	std::vector<char> GetNextTensor();
+
 private:
 	void ReadHeaders();
-	std::vector<char> GetNextTensor();
+	std::vector<char> GetData(const size_t index);
+	void ReadTensorOrder();
 
 	/// <summary>
 	/// Nested class to keep track of all "files" in the given zip archive
@@ -48,6 +41,7 @@ private:
 private:
 	std::ifstream file;
 	std::vector<ZipEntry> entries;
-	int last_index;
+	std::vector<size_t> tensor_order;
+	int next_tensor_index;
 };
 
