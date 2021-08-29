@@ -38,10 +38,14 @@ endif()
 
 
 add_executable(${CMAKE_PROJECT_NAME} ${${CMAKE_PROJECT_NAME}_HEADERS} ${${CMAKE_PROJECT_NAME}_SRC})
-target_include_directories(${CMAKE_PROJECT_NAME} PUBLIC include)
-target_link_libraries(${CMAKE_PROJECT_NAME} "${TORCH_LIBRARIES}")
-target_link_libraries(${CMAKE_PROJECT_NAME} ryml)
 set_property(TARGET ${CMAKE_PROJECT_NAME} PROPERTY CXX_STANDARD 14)
+target_include_directories(${CMAKE_PROJECT_NAME} PUBLIC include)
+
+target_include_directories(${CMAKE_PROJECT_NAME} PUBLIC ${PROJECT_SOURCE_DIR}/3rdparty/stb_image)
+
+target_link_libraries(${CMAKE_PROJECT_NAME} "${TORCH_LIBRARIES}")
+
+target_link_libraries(${CMAKE_PROJECT_NAME} ryml)
 
 
 # The following code block is suggested to be used on Windows.
