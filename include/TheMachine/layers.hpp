@@ -9,6 +9,7 @@ public:
 		int kernel_size = 1, int stride = 1);
 	~ConvImpl();
 	torch::Tensor forward(torch::Tensor x);
+	void FuseConvAndBN();
 
 private:
 	torch::nn::Conv2d conv;

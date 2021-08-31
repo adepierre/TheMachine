@@ -6,11 +6,9 @@
 #include <ryml.hpp>
 
 
-YoloV5BlockImpl::YoloV5BlockImpl(const int attach_index_,
-    const std::vector<int>& from_, const KnownBlock type_,
-    torch::nn::Sequential seq_)
+YoloV5BlockImpl::YoloV5BlockImpl(const std::vector<int>& from_,
+    const KnownBlock type_, torch::nn::Sequential seq_)
 {
-    attach_index = attach_index_;
     from = from_;
     type = type_;
     seq = seq_;
@@ -34,6 +32,18 @@ torch::Tensor YoloV5BlockImpl::forward(std::vector<torch::Tensor> x)
     }
 }
 
+const std::vector<int>& YoloV5BlockImpl::From() const
+{
+    return from;
+}
+
+const KnownBlock YoloV5BlockImpl::Type() const
+{
+    return type;
+}
+
+
+
 
 
 
@@ -53,9 +63,9 @@ torch::Tensor xywh2xyxy(torch::Tensor x)
     output.index({ torch::indexing::Slice(), 1 }) =
         x.index({ torch::indexing::Slice(), 1 }) - x.index({ torch::indexing::Slice(), 3 }) / 2.0f;
     output.index({ torch::indexing::Slice(), 2 }) =
-        x.index({ torch::indexing::Slice(), 0 }) - x.index({ torch::indexing::Slice(), 2 }) / 2.0f;
+        x.index({ torch::indexing::Slice(), 0 }) + x.index({ torch::indexing::Slice(), 2 }) / 2.0f;
     output.index({ torch::indexing::Slice(), 3 }) =
-        x.index({ torch::indexing::Slice(), 1 }) - x.index({ torch::indexing::Slice(), 3 }) / 2.0f;
+        x.index({ torch::indexing::Slice(), 1 }) + x.index({ torch::indexing::Slice(), 3 }) / 2.0f;
 
     return output;
 }
@@ -151,6 +161,7 @@ YoloV5Impl::YoloV5Impl(const std::string& config_path, const int num_in_channels
     ParseConfig(config_path);
     register_module("module_list", module_list);
     SetStride();
+    InitWeights();
 }
 
 YoloV5Impl::~YoloV5Impl()
@@ -163,11 +174,11 @@ torch::Tensor YoloV5Impl::forward(torch::Tensor x)
     std::vector<torch::Tensor> backbone_outputs = forward_backbone(x);
 
     YoloV5BlockImpl* detect = module_list[module_list->size() - 1]->as<YoloV5Block>();
-    std::vector<torch::Tensor> detect_inputs(detect->from.size());
+    std::vector<torch::Tensor> detect_inputs(detect->From().size());
 
-    for (size_t i = 0; i < detect->from.size(); ++i)
+    for (size_t i = 0; i < detect->From().size(); ++i)
     {
-        int c = detect->from[i];
+        int c = detect->From()[i];
         if (c < 0)
         {
             c = backbone_outputs.size() + c;
@@ -230,7 +241,7 @@ void YoloV5Impl::LoadWeights(PythonWeightsFile& weights)
 }
 
 std::vector<torch::Tensor> YoloV5Impl::NonMaxSuppression(torch::Tensor prediction,
-    float conf_threshold, float iou_threshold, int max_det, const std::vector<int>& class_filter)
+    float conf_threshold, float iou_threshold, const std::vector<int>& class_filter)
 {
     const size_t batch_size = prediction.size(0);
     std::vector<torch::Tensor> outputs(batch_size, torch::zeros({0, 6}, torch::TensorOptions().device(prediction.device())));
@@ -286,6 +297,22 @@ std::vector<torch::Tensor> YoloV5Impl::NonMaxSuppression(torch::Tensor predictio
     return outputs;
 }
 
+int YoloV5Impl::GetMaxStride() const
+{
+    return strides.max().item<float>();
+}
+
+void YoloV5Impl::FuseConvAndBN()
+{
+    apply([](torch::nn::Module& m)
+        {
+            if (auto* conv = m.as<Conv>())
+            {
+                conv->FuseConvAndBN();
+            }
+        });
+}
+
 std::vector<torch::Tensor> YoloV5Impl::forward_backbone(torch::Tensor x)
 {
     std::vector<torch::Tensor> outputs(module_list->size() - 1);
@@ -294,16 +321,16 @@ std::vector<torch::Tensor> YoloV5Impl::forward_backbone(torch::Tensor x)
     {
         YoloV5BlockImpl* block = module_list[i]->as<YoloV5Block>();
 
-        std::vector<torch::Tensor> inputs(block->from.size());
-        for (size_t j = 0; j < block->from.size(); ++j)
+        std::vector<torch::Tensor> inputs(block->From().size());
+        for (size_t j = 0; j < block->From().size(); ++j)
         {
-            if (block->from[j] == -1)
+            if (block->From()[j] == -1)
             {
                 inputs[j] = x;
             }
             else
             {
-                inputs[j] = outputs[block->from[j]];
+                inputs[j] = outputs[block->From()[j]];
             }
         }
 
@@ -547,7 +574,7 @@ void YoloV5Impl::ParseConfig(const std::string& config_path)
             }
         }
 
-        module_list->push_back(YoloV5Block(i, from, module_type, internal_seq));
+        module_list->push_back(YoloV5Block(from, module_type, internal_seq));
 
         // Clean the initial 3 in the output_channels
         if (i == 0)
@@ -567,16 +594,32 @@ void YoloV5Impl::SetStride()
     std::vector<torch::Tensor> backbone_outputs = forward_backbone(backbone_input);
 
     YoloV5BlockImpl* detect = module_list[module_list->size() - 1]->as<YoloV5Block>();
-    torch::Tensor strides = torch::zeros(detect->from.size());
+    strides = torch::zeros(detect->From().size());
 
-    for (size_t i = 0; i < detect->from.size(); ++i)
+    for (size_t i = 0; i < detect->From().size(); ++i)
     {
-        int c = detect->from[i];
+        int c = detect->From()[i];
         if (c < 0)
         {
             c = backbone_outputs.size() + c;
         }
         strides[i] = s / backbone_outputs[c].size(-2);
     }
-    detect->seq[0]->as<Detect>()->SetStride(strides);
+
+    if (detect->Type() == KnownBlock::Detect)
+    {
+        detect->children()[0]->as<torch::nn::Sequential>()->at<DetectImpl>(0).SetStride(strides);
+    }
+}
+
+void YoloV5Impl::InitWeights()
+{
+    apply([](torch::nn::Module& m)
+        {
+            if (auto* l = m.as<torch::nn::BatchNorm2d>())
+            {
+                l->options.eps(1e-3);
+                l->options.momentum(0.03);
+            }
+        });
 }

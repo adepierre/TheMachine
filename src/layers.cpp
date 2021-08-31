@@ -4,8 +4,8 @@
 ConvImpl::ConvImpl(int channels_in, int channels_out,
     int kernel_size, int stride) :
     conv(torch::nn::Conv2dOptions(channels_in, channels_out, kernel_size)
-        .stride(stride).padding(kernel_size / 2).bias(false)),
-    bn(torch::nn::BatchNorm2d(channels_out)),
+        .stride(stride).padding(kernel_size / 2).padding_mode(torch::kZeros).bias(false)),
+    bn(channels_out),
     act(torch::nn::SiLU())
 {
     register_module("conv", conv);
@@ -20,9 +20,42 @@ ConvImpl::~ConvImpl()
 
 torch::Tensor ConvImpl::forward(torch::Tensor x)
 {
-    return act(bn(conv(x)));
+    if (bn.is_empty())
+    {
+        return act(conv(x));
+    }
+    else
+    {
+        return act(bn(conv(x)));
+    }
 }
 
+void ConvImpl::FuseConvAndBN()
+{
+    torch::nn::Conv2d fused_conv(torch::nn::Conv2dOptions(
+        conv->options.in_channels(), conv->options.out_channels(),
+        conv->options.kernel_size()).stride(conv->options.stride())
+        .padding(conv->options.padding()).groups(conv->options.groups())
+        .bias(true));
+
+    // Set fused weights
+    torch::Tensor w_conv = conv->weight.clone().view({ conv->options.out_channels(), -1 });
+    torch::Tensor w_bn = torch::diag(bn->weight.div(torch::sqrt(bn->options.eps() + bn->running_var)));
+
+    fused_conv->weight.copy_(torch::mm(w_bn, w_conv).view(fused_conv->weight.sizes()));
+
+    // Set fused bias
+    torch::Tensor b_conv = torch::zeros(conv->weight.size(0), torch::TensorOptions().device(conv->weight.device()));
+    torch::Tensor b_bn = bn->bias - bn->weight.mul(bn->running_mean).div(torch::sqrt(bn->running_var + bn->options.eps()));
+
+    fused_conv->bias.copy_(torch::mm(w_bn, b_conv.reshape({ -1, 1 })).reshape(-1) + b_bn);
+
+    conv = replace_module("conv", fused_conv);
+
+    bn = nullptr;
+    unregister_module("bn");
+
+}
 
 
 
@@ -43,7 +76,7 @@ torch::Tensor FocusImpl::forward(torch::Tensor x)
 {
     return conv(torch::cat({
             x.index({"...", torch::indexing::Slice(0, torch::indexing::None, 2), torch::indexing::Slice(0, torch::indexing::None, 2) }),
-            x.index({"...", torch::indexing::Slice(1, torch::indexing::None, 2), torch::indexing::Slice(1, torch::indexing::None, 2) }),
+            x.index({"...", torch::indexing::Slice(1, torch::indexing::None, 2), torch::indexing::Slice(0, torch::indexing::None, 2) }),
             x.index({"...", torch::indexing::Slice(0, torch::indexing::None, 2), torch::indexing::Slice(1, torch::indexing::None, 2) }),
             x.index({"...", torch::indexing::Slice(1, torch::indexing::None, 2), torch::indexing::Slice(1, torch::indexing::None, 2) })        
         }, 1));

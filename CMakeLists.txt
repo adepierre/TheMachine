@@ -4,6 +4,8 @@ project(TheMachine)
 add_subdirectory(3rdparty/rapidyaml)
 
 find_package(Torch REQUIRED)
+find_package(OpenCV REQUIRED)
+
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS}")
 
 set(${CMAKE_PROJECT_NAME}_SRC
@@ -41,11 +43,10 @@ add_executable(${CMAKE_PROJECT_NAME} ${${CMAKE_PROJECT_NAME}_HEADERS} ${${CMAKE_
 set_property(TARGET ${CMAKE_PROJECT_NAME} PROPERTY CXX_STANDARD 14)
 target_include_directories(${CMAKE_PROJECT_NAME} PUBLIC include)
 
-target_include_directories(${CMAKE_PROJECT_NAME} PUBLIC ${PROJECT_SOURCE_DIR}/3rdparty/stb_image)
-
-target_link_libraries(${CMAKE_PROJECT_NAME} "${TORCH_LIBRARIES}")
-
+target_link_libraries(${CMAKE_PROJECT_NAME} ${TORCH_LIBRARIES})
+target_link_libraries(${CMAKE_PROJECT_NAME} ${OpenCV_LIBS})
 target_link_libraries(${CMAKE_PROJECT_NAME} ryml)
+
 
 
 # The following code block is suggested to be used on Windows.
