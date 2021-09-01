@@ -3,7 +3,7 @@
 ![detection example](data/plane_processed.png)
 
 ## Introduction
-The Machine is a C++ implementation of [YoloV5](https://github.com/ultralytics/yolov5) using LibTorch with a nice UI inspired by the TV Show "Person of Interest".
+The Machine is a C++ inference-only implementation of [YoloV5](https://github.com/ultralytics/yolov5) using LibTorch with a nice UI inspired by the TV Show "Person of Interest".
 
 The code is split into smaller projects so they can be easily reused:
 - ``WeightsLoading``, a simple utility that is used to load trained weights directly from python ``.pt`` files without converting the model with torch.jit
