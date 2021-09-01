@@ -18,6 +18,12 @@ public:
     PythonWeightsFile() = delete;
     PythonWeightsFile(const PythonWeightsFile&) = delete;
 
+	/// <summary>
+	/// Read the data contained in the zip entry
+	/// of the next tensor file. Throws an error
+	/// if there isn't any tensor available.
+	/// </summary>
+	/// <returns>Raw tensor bytes</returns>
 	std::vector<char> GetNextTensor();
 
 private:

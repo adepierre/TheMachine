@@ -1,6 +1,4 @@
-#include <torch/nn/module.h>
-
-#include "TheMachine/utils.hpp"
+#include "WeightsLoading/weights_loader.hpp"
 
 PythonWeightsFile::PythonWeightsFile(const std::string& path)
 {
@@ -100,11 +98,12 @@ bool is_digit(const char c)
 // With torch.save with versions < 1.9, tensors
 // are saved using their _cdata pointer as name
 // which means they are not necessarily ordered
-// in the archive file. This tries to find the
-// good order in which they need to be read
-// (from 1.9, they are saved as 0, 1, 2 ...,
-// this will be modified when/if ultralytics update
-// the pytorch version used to save the weights files)
+// in the archive file. This function tries to 
+// find the good order in which they need to be
+// read. From 1.9, they are saved as 0, 1, 2 ...,
+// this function will have to be updated when/if
+// the version used to save the weights files is
+// updated
 void PythonWeightsFile::ReadTensorOrder()
 {
 	tensor_order.clear();
@@ -124,8 +123,7 @@ void PythonWeightsFile::ReadTensorOrder()
 
 	if (data_index == -1)
 	{
-		std::cerr << "Warning, no archive/data.pkl entry found in provided zip file" << std::endl;
-		return;
+		throw std::runtime_error("No archive/data.pkl entry found in provided zip file");
 	}
 
 	std::vector<char> data_pkl = GetData(data_index);
@@ -134,6 +132,7 @@ void PythonWeightsFile::ReadTensorOrder()
 
 	std::string current_tensor_name = "";
 
+	// Search for potential tensor names (sequence of digits for _cdata)
 	while (data_index < data_pkl.size())
 	{
 		//If this is a digit, add it to the current name
