@@ -42,11 +42,17 @@ void TheMachine::Detect(const std::string& path, const std::string& save_path)
 
     PreprocessedImage img = Preprocess(path);
 
-    // Create tensor
+    // Create HWC, B, G, R tensor
     torch::Tensor input = torch::from_blob(img.im.data, { img.im.rows, img.im.cols, img.im.channels() }, torch::TensorOptions().dtype(torch::kByte));
 
     // Convert to CHW, R,G,B
-    input = input.permute({ 2,0,1 }).flip(0).unsqueeze(0).to(device).to(torch::kFloat) / 255.0f;
+    input = input.permute({ 2,0,1 }).flip(0);
+
+    // Add one batch channel
+    input = input.unsqueeze(0);
+
+    // Transfer to GPU if necessary, then convert to float
+    input = input.to(device).to(torch::kFloat) / 255.0f;
 
     // Pass the image through YoloV5 and apply NMS
     torch::Tensor output = detector->forward(input);
@@ -57,14 +63,18 @@ void TheMachine::Detect(const std::string& path, const std::string& save_path)
     output.index({ torch::indexing::Slice(), torch::indexing::Slice(1, 4, 2) }) -= img.pad_y;
     output.index({ torch::indexing::Slice(), torch::indexing::Slice(0, 4) }) /= img.ratio;
 
+    // Transform tensor into Detection
     std::vector<Detection> detections = PostProcess(output);
 
+    // Draw the detections
     PlotResults(img.original, detections);
 
     if (!save_path.empty())
     {
         cv::imwrite(save_path, img.original);
     }
+
+    std::cout << "Press any key to quit..." << std::endl;
 
     cv::imshow("TheMachine", img.original);
     cv::waitKey(0);
