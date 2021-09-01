@@ -48,6 +48,7 @@ The arguments you can pass to the program are:
 This was just a project I did for fun on my spare time, but I still have quite a few ideas to improve things. Here is a list without any idea on when or if I'll implement them in the future:
 
 - more input format, supporting videos/webcam/YT videos or internet streams
+- add an option for processing large images by splitting them in smaller images with overlap
 - adding a tracking network, to follow a target in a video
 - adding a deep speech to text model, to monitor phone calls
 - other fun things?
