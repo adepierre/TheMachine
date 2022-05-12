@@ -95,15 +95,12 @@ bool is_digit(const char c)
 	return c > 0x2F && c < 0x3A;
 }
 
-// With torch.save with versions < 1.9, tensors
-// are saved using their _cdata pointer as name
-// which means they are not necessarily ordered
-// in the archive file. This function tries to 
-// find the good order in which they need to be
-// read. From 1.9, they are saved as 0, 1, 2 ...,
-// this function will have to be updated when/if
-// the version used to save the weights files is
-// updated
+// This function tries to load tensor data from
+// python torch.save format (basically pickle like
+// object in a zip file). It searches for matching
+// patterns indicating tensor data and load them
+// in the order they appear, so they can be loaded
+// in the same C++ architecture later.
 void PythonWeightsFile::ReadTensorOrder()
 {
 	tensor_order.clear();
@@ -132,14 +129,47 @@ void PythonWeightsFile::ReadTensorOrder()
 
 	std::string current_tensor_name = "";
 
-	// Search for potential tensor names (sequence of digits for _cdata)
+	// Search for potential tensor names
 	while (data_index < data_pkl.size())
 	{
-		//If this is a digit, add it to the current name
-		if (is_digit(data_pkl[data_index]))
+		int tensor_name_length = 0;
+		// 0x58 (X) is the pickle header for string, followed by the size of the string
+		if (data_pkl[data_index] == 0x58 && data_index + 4 < data_pkl.size())
 		{
-			current_tensor_name += data_pkl[data_index];
+			tensor_name_length =
+				(data_pkl[data_index + 1] << 0) |
+				(data_pkl[data_index + 2] << 8) |
+				(data_pkl[data_index + 3] << 16) |
+				(data_pkl[data_index + 4] << 24);
+
+			// We read 5 chars (1 + 4)
+			data_index += 5;
+
+			bool only_digit = true;
+			for (size_t i = 0; i < tensor_name_length; ++i)
+			{
+				if (!is_digit(data_pkl[data_index + i]))
+				{
+					only_digit = false;
+					break;
+				}
+				current_tensor_name += data_pkl[data_index + i];
+			}
+
+			// That was not a tensor name, revert name
+			// length reading
+			if (!only_digit)
+			{
+				current_tensor_name = "";
+				data_index -= 4;
+			}
+			// That was a tensor name, move the cursor
+			else
+			{
+				data_index += tensor_name_length;
+			}
 		}
+
 		// If we had digits before but this isn't one,
 		// search for a tensor with a matching name
 		else if (!current_tensor_name.empty())
