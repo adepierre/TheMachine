@@ -190,7 +190,6 @@ std::vector<torch::Tensor> YoloV5Impl::forward_backbone(torch::Tensor x)
                 inputs[j] = outputs[block->From()[j]];
             }
         }
-
         x = block->forward(inputs);
 
         if (save_module_output[i])
@@ -387,14 +386,22 @@ void YoloV5Impl::ParseConfig(const std::string& config_path)
             else if (module_name == "Conv")
             {
                 module_type = KnownBlock::Conv;
-                int kernel_size, stride;
+                int kernel_size, stride, padding;
                 args[1] >> kernel_size;
                 args[2] >> stride;
+                if (args.num_children() > 3)
+                {
+                    args[3] >> padding;
+                }
+                else
+                {
+                    padding = -1;
+                }
 
                 for (size_t j = 0; j < block_depth; j++)
                 {
                     internal_seq->push_back(Conv(channel_in, channel_out,
-                        kernel_size, stride));
+                        kernel_size, stride, padding));
                 }
             }
             else if (module_name == "Focus")
@@ -420,6 +427,22 @@ void YoloV5Impl::ParseConfig(const std::string& config_path)
                     internal_seq->push_back(SPP(channel_in, channel_out,
                         kernel_sizes));
                 }
+            }
+            else if (module_name == "SPPF")
+            {
+                module_type = KnownBlock::SPPF;
+                int kernel_size;
+                args[1] >> kernel_size;
+
+                for (size_t j = 0; j < block_depth; j++)
+                {
+                    internal_seq->push_back(SPPF(channel_in, channel_out,
+                        kernel_size));
+                }
+            }
+            else
+            {
+                throw std::runtime_error("Unknown module name in model file: " + module_name);
             }
         }
 

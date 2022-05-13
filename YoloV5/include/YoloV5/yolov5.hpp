@@ -8,6 +8,7 @@ enum class KnownBlock
 	Conv,
 	C3,
 	SPP,
+	SPPF,
 	Upsample,
 	Concat,
 	Detect

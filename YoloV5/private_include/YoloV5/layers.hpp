@@ -6,7 +6,7 @@ class ConvImpl : public torch::nn::Module
 {
 public:
 	ConvImpl(int channels_in, int channels_out, 
-		int kernel_size = 1, int stride = 1);
+		int kernel_size = 1, int stride = 1, int padding = -1);
 	~ConvImpl();
 	torch::Tensor forward(torch::Tensor x);
 	void FuseConvAndBN();
@@ -104,6 +104,24 @@ private:
 	torch::nn::ModuleList m;
 };
 TORCH_MODULE(SPP);
+
+
+
+
+class SPPFImpl : public torch::nn::Module
+{
+public:
+	SPPFImpl(const int channels_in, const int channels_out,
+		const int kernel_size = 5);
+	~SPPFImpl();
+
+	torch::Tensor forward(torch::Tensor x);
+
+private:
+	Conv cv1, cv2;
+	torch::nn::MaxPool2d m;
+};
+TORCH_MODULE(SPPF);
 
 
 

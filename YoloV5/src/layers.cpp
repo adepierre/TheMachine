@@ -2,9 +2,9 @@
 
 
 ConvImpl::ConvImpl(int channels_in, int channels_out,
-    int kernel_size, int stride) :
+    int kernel_size, int stride, int padding) :
     conv(torch::nn::Conv2dOptions(channels_in, channels_out, kernel_size)
-        .stride(stride).padding(kernel_size / 2).padding_mode(torch::kZeros).bias(false)),
+        .stride(stride).padding(padding == -1 ? kernel_size / 2 : padding).padding_mode(torch::kZeros).bias(false)),
     bn(channels_out),
     act(torch::nn::SiLU())
 {
@@ -197,6 +197,38 @@ torch::Tensor SPPImpl::forward(torch::Tensor x)
     {
         concats[i + 1] = m[i]->as<torch::nn::MaxPool2d>()->forward(x);
     }
+
+    return cv2(torch::cat(concats, 1));
+}
+
+
+
+
+SPPFImpl::SPPFImpl(const int channels_in, const int channels_out,
+    const int kernel_size) :
+    cv1(Conv(channels_in, channels_in / 2, 1, 1)),
+    cv2(Conv(channels_in / 2 * 4, channels_out, 1, 1)),
+    m(torch::nn::MaxPool2d(torch::nn::MaxPool2dOptions(kernel_size).stride(1).padding(kernel_size / 2)))
+{
+    register_module("cv1", cv1);
+    register_module("cv2", cv2);
+    register_module("m", m);
+}
+
+SPPFImpl::~SPPFImpl()
+{
+
+}
+
+torch::Tensor SPPFImpl::forward(torch::Tensor x)
+{
+    x = cv1(x);
+
+    std::vector<torch::Tensor> concats(4);
+    concats[0] = x;
+    concats[1] = m(x);
+    concats[2] = m(concats[1]);
+    concats[3] = m(concats[2]);
 
     return cv2(torch::cat(concats, 1));
 }
