@@ -265,7 +265,6 @@ DetectImpl::DetectImpl(const int nc, const std::vector<std::vector<int> >& ancho
     anchor_grid = anchors.clone().view({ num_detection_layers, 1, -1, 1, 1, 2 });
 
     register_buffer("anchors", anchors);
-    register_buffer("anchor_grid", anchor_grid);
 
     for (int i = 0; i < output_convs.size(); ++i)
     {

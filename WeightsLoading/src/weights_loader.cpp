@@ -101,92 +101,22 @@ bool is_digit(const char c)
 // patterns indicating tensor data and load them
 // in the order they appear, so they can be loaded
 // in the same C++ architecture later.
+// Very hacky and not advised way to load weights
 void PythonWeightsFile::ReadTensorOrder()
 {
 	tensor_order.clear();
 	tensor_order.reserve(entries.size());
 
-	size_t data_index = -1;
-
-	// Search for the data entry (should be the first one)
 	for (size_t i = 0; i < entries.size(); ++i)
 	{
-		if (entries[i].name == "archive/data.pkl")
+		for (size_t j = 0; j < entries.size(); ++j)
 		{
-			data_index = i;
-			break;
-		}
-	}
-
-	if (data_index == -1)
-	{
-		throw std::runtime_error("No archive/data.pkl entry found in provided zip file");
-	}
-
-	std::vector<char> data_pkl = GetData(data_index);
-
-	data_index = 0;
-
-	std::string current_tensor_name = "";
-
-	// Search for potential tensor names
-	while (data_index < data_pkl.size())
-	{
-		int tensor_name_length = 0;
-		// 0x58 (X) is the pickle header for string, followed by the size of the string
-		if (data_pkl[data_index] == 0x58 && data_index + 4 < data_pkl.size())
-		{
-			tensor_name_length =
-				(data_pkl[data_index + 1] << 0) |
-				(data_pkl[data_index + 2] << 8) |
-				(data_pkl[data_index + 3] << 16) |
-				(data_pkl[data_index + 4] << 24);
-
-			// We read 5 chars (1 + 4)
-			data_index += 5;
-
-			bool only_digit = true;
-			for (size_t i = 0; i < tensor_name_length; ++i)
+			if (entries[j].name == "archive/data/" + std::to_string(i))
 			{
-				if (!is_digit(data_pkl[data_index + i]))
-				{
-					only_digit = false;
-					break;
-				}
-				current_tensor_name += data_pkl[data_index + i];
-			}
-
-			// That was not a tensor name, revert name
-			// length reading
-			if (!only_digit)
-			{
-				current_tensor_name = "";
-				data_index -= 4;
-			}
-			// That was a tensor name, move the cursor
-			else
-			{
-				data_index += tensor_name_length;
+				tensor_order.push_back(j);
+				break;
 			}
 		}
-
-		// If we had digits before but this isn't one,
-		// search for a tensor with a matching name
-		else if (!current_tensor_name.empty())
-		{
-			for (size_t i = 0; i < entries.size(); ++i)
-			{
-				if (entries[i].name == "archive/data/" + current_tensor_name)
-				{
-					tensor_order.push_back(i);
-					break;
-				}
-			}
-
-			current_tensor_name = "";
-		}
-
-		data_index++;
 	}
 }
 
